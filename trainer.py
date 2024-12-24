@@ -6,8 +6,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from APPSCollator import APPSCollator
-from APPSDataset import APPSDataset
-import AutoTokenizer
+from DatasetClass import APPSDataset
+from transformers import AutoTokenizer
+from model import LightweightTransformer
 
 MODEL_NAME = "Salesforce/codet5-base"  # or any other CodeT5 variant
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -19,7 +20,7 @@ print("CodeT5 vocabulary size:", vocab_size)
 
 # Hyperparams
 batch_size = 2
-epochs = 3
+epochs = 2
 lr = 1e-4
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -43,6 +44,11 @@ model = LightweightTransformer(
     dim_feedforward=512
 ).to(device)
 
+print("BOS token ID:", tokenizer.bos_token_id)
+print("EOS token ID:", tokenizer.eos_token_id)
+print("PAD token ID:", tokenizer.pad_token_id)
+
+
 # Define optimizer & loss
 optimizer = optim.AdamW(model.parameters(), lr=lr)
 criterion = nn.CrossEntropyLoss(ignore_index=-100)  # ignore padding in the label
@@ -57,10 +63,14 @@ for epoch in range(epochs):
         attention_mask = batch["attention_mask"].to(device)  # not used in our custom model but available
         labels = batch["labels"].to(device)
 
+        tgt_input = labels.clone()
+        pad_id = tokenizer.pad_token_id
+        tgt_input[tgt_input == -100] = pad_id
+
         # Our model expects src, tgt
         # In seq2seq, typically we shift the labels by 1. For simplicity, let's just pass labels as is.
         # We'll assume the model is trained to predict labels[i+1] from input[i], etc.
-        logits = model(input_ids, labels)  # Note: 'labels' used as 'tgt_input' here for teacher forcing
+        logits = model(input_ids, tgt_input)  # Note: 'labels' used as 'tgt_input' here for teacher forcing
 
         # Reshape for cross-entropy
         # logits: [batch_size, tgt_seq_len, vocab_size]
@@ -76,9 +86,11 @@ for epoch in range(epochs):
 
         total_loss += loss.item()
 
-        if (step + 1) % 50 == 0:
-            print(f"Epoch [{epoch+1}/{epochs}], Step [{step+1}], Loss: {loss.item():.4f}")
+        print(f"Epoch [{epoch+1}/{epochs}], Step [{step+1}], Loss: {loss.item():.4f}")
 
     avg_loss = total_loss / (step + 1)
     print(f"Epoch [{epoch+1}/{epochs}] finished with average loss {avg_loss:.4f}")
 
+model_save_path = "my_lightweight_transformer.pth"
+torch.save(model.state_dict(), model_save_path)
+print(f"Model saved to {model_save_path}")
